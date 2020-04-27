@@ -1,8 +1,4 @@
-'''
-Created on 21 Apr 2020
 
-@author: Antero
-'''
 
 import sys
 import grequests
@@ -20,11 +16,11 @@ HUUTONET_SEARCH_URL = HUUTONET_URL + "/haku/words/"
 
 def isGoodResponse(resp):
     content_type = resp.headers['Content-Type'].lower()
-    return (resp.status_code == 200 
-            and content_type is not None 
+    return (resp.status_code == 200
+            and content_type is not None
             and content_type.find('html') > -1)
 
-       
+
 def exit_program(conn):
     if conn:
         conn.close()
@@ -34,17 +30,17 @@ def exit_program(conn):
 
 
 def main():
-    
+
     # Form connection to database
     conn = db_commands.create_connection(DB_PATH)
-    
-    
+
+
     print("*****")
     print("*****")
     print("Search from huuto.net")
     print("*****")
     print("*****")
-    
+
     # Ask search terms
     while(True):
         try:
@@ -57,9 +53,9 @@ def main():
             print("Encountered error" + str(e) + "in input. Enter search terms delimited by space. Exit program with \"c\".")
     if not terms:
         exit_program(conn)
-        
-        
-        
+
+
+
     # Check if user wants to add min or max price to search
     while(True):
         try:
@@ -73,8 +69,8 @@ def main():
                 print("Only \"yes\", \"y\", \"no\" and \"n\" are accepted answers!")
         except Exception as e:
             print("Failed to read input with error: " + str(e))
-     
-     
+
+
     # Check if user wants to include minimum price to search
     price_min = None
     if ask_price and (ask_price.lower() == "yes" or ask_price.lower() == "y"):
@@ -88,10 +84,10 @@ def main():
                     print("Price min: " + str(price_min))
             except Exception as e:
                 print("Failed to read input with error: " + str(e))
-                
-                
+
+
     # Check if user wants to include maximum price to search
-    price_max = None  
+    price_max = None
     if ask_price and (ask_price.lower() == "yes" or ask_price.lower() == "y"):
         while(not price_max):
             try:
@@ -99,11 +95,11 @@ def main():
                 if price_max is None:
                     break
                 else:
-                    price_max = int(price_max) 
+                    price_max = int(price_max)
                     print("Price max: " + str(price_max))
             except Exception as e:
                 print("Failed to read input with error: " + str(e))
-            
+
     # Form search url and db_table
     search_url = HUUTONET_SEARCH_URL
     db_table = ""
@@ -113,29 +109,29 @@ def main():
         if len(terms) > 1 and term is not terms[-1]:
             search_url += "+"
             db_table += "+"
-            
+
     print("Creating table " + db_table)
     db_commands.execute_sql(conn, db_commands.create_table_sql(db_table))
-            
+
     if ask_price:
         if price_min:
             search_url += "/price_min/" + str(price_min)
         if price_max:
             search_url += "/price_max/" + str(price_max)
     print("\nSearch url: " + search_url)
-    
+
     # Request first page
     req = grequests.get(search_url)
     res = grequests.map([req])
     res = res[0]
-    
+
     if not isGoodResponse(res):
         print("Encountered error searching url: " + search_url)
         exit_program(conn)
-    
+
     # Create a BeautifulSoup object
     soup = BeautifulSoup(res.text, 'html.parser')
-    
+
     # Check how many search result pages and request all pages
     pages = soup.find(id='pagination')
     if pages:
@@ -145,18 +141,18 @@ def main():
         if num_pages > MAX_PAGES:
             print("Number of search result pages exceeds " + str(MAX_PAGES) + ". Shutting down program.")
             exit_program(conn)
-        
+
     # Enter all results to list
     search_results = soup.find_all('div', class_='grid-element-container')
     if pages:
         search_urls = []
         for num in range(2, num_pages + 1):
-            
+
             # Create connection
             search_url_page = search_url
             search_url_page += "/page/" + str(num)
             search_urls.append(search_url_page)
-            
+
         reqs = (grequests.get(url) for url in search_urls)
         results = grequests.map(reqs)
         for res in results:
@@ -164,25 +160,25 @@ def main():
                 soup_pages = BeautifulSoup(res.text, 'html.parser')
                 search_results_pages = soup_pages.find_all('div', class_='grid-element-container')
                 search_results += search_results_pages
-    
+
     print("Number of search results: " + str(len(search_results)))
-    
+
     # Iterate over results
     result_num = 1
     while(True):
         try:
             print_results_input = str(input("\nFound " + str(len(search_results)) + " results. Do you wish to print them? (yes/no)\n"))
-            if print_results_input and (print_results_input.lower() == "yes" 
+            if print_results_input and (print_results_input.lower() == "yes"
                                         or print_results_input.lower() == "y"):
                 break
-            elif print_results_input and (print_results_input.lower() == "no" 
+            elif print_results_input and (print_results_input.lower() == "no"
                                         or print_results_input.lower() == "n"):
                 exit_program(conn)
             else:
                 print("Only \"yes\", \"y\", \"no\" and \"n\" are accepted answers!")
         except Exception as e:
             print("Failed to read input with error: " + str(e))
-    
+
     # Go over results and insert into database
     titles = []
     locations = []
@@ -193,7 +189,7 @@ def main():
     conditions = []
     item_ids = []
     sellers = []
-    
+
     for result in search_results:
         try:
             title = result.find('div', class_='item-card__title').text.strip()
@@ -202,7 +198,7 @@ def main():
             links.append(link)
         except Exception as e:
             print("Encountered error" + str(e) + " when parsing search results")
-            
+
     # Get seller names through item links
     search_results = []
     reqs = (grequests.get(link) for link in links)
@@ -212,7 +208,7 @@ def main():
             soup_page = BeautifulSoup(results[i].text, 'html.parser')
             sellers.append(soup_page.find('div', class_='mini-profile').find('a', href=True).text.strip())
             info_table = soup_page.find('table', class_='info-table').find_all('tr')
-                
+
             # Find item info from table and add to db
             for tr in info_table:
                 tds = tr.find_all('td')
@@ -241,13 +237,13 @@ def main():
             if inserted:
                 print("New item added: "+str(item_ids[i]))
             conn.commit()
-            
+
     conn.commit()
     if conn:
         conn.close()
-        
-    
-    
-    
+
+
+
+
 if __name__ == "__main__":
     main()
