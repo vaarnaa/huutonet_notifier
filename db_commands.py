@@ -15,7 +15,7 @@ def create_connection(db_file):
 
 
 def create_table_sql(table_name):
-    sql_create_table = """ CREATE TABLE IF NOT EXISTS {} (
+    sql_create_table = """ CREATE TABLE IF NOT EXISTS '{}' (
                                         id integer PRIMARY KEY,
                                         title text NOT NULL,
                                         seller text NOT NULL,
@@ -29,7 +29,7 @@ def create_table_sql(table_name):
 
 
 def insert_row_sql(*args):
-    sql_insert_row = """INSERT INTO {}(id, title, seller, price, condition, location, begin_date, end_date)
+    sql_insert_row = """INSERT INTO '{}'(id, title, seller, price, condition, location, begin_date, end_date)
                                VALUES({}, '{}', '{}', {}, '{}', '{}', '{}', '{}')"""\
                                .format(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8])
 
@@ -61,7 +61,7 @@ def get_ids_from_table(conn, table_name):
         return None
 
 def update_row_sql(*args):
-    sql = """UPDATE {}
+    sql = """UPDATE '{}'
              SET id = {}, title = '{}', seller = '{}', price = {}, condition = '{}', location = '{}', begin_date = '{}', end_date = '{}'
              WHERE id = {}""".format(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[1])
     return sql

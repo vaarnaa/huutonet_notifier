@@ -2,23 +2,22 @@
 
 import sys
 import grequests
-from bs4 import BeautifulSoup
+import requests
 from datetime import datetime
-
+import json
 
 import db_commands
 
 MAX_PAGES = 20
 DB_PATH = './testDB.db'
-HUUTONET_URL = "https://www.huuto.net"
-HUUTONET_SEARCH_URL = HUUTONET_URL + "/haku/words/"
+HUUTONET_API_ROOT = "https://api.huuto.net/1.1/"
 
 
-def isGoodResponse(resp):
-    content_type = resp.headers['Content-Type'].lower()
-    return (resp.status_code == 200
+def is_good_response(res):
+    content_type = res.headers['Content-Type'].lower()
+    return (res.status_code == 200
             and content_type is not None
-            and content_type.find('html') > -1)
+            and content_type.strip() == "application/json")
 
 
 def exit_program(conn):
@@ -43,13 +42,29 @@ def ask_search_terms():
             print("\nEncountered error" + str(e) + "in input.")
 
 
+def ask_to_add_items(count_items, table_name):
+    while(True):
+        try:
+            print_results_input = str(input("\nFound {} results. Do you wish to add them to table {}? (yes/no)\n".format(count_items, table_name)))
+            if print_results_input and (print_results_input.lower() == "yes"
+                                        or print_results_input.lower() == "y"):
+                return True
+            elif print_results_input and (print_results_input.lower() == "no"
+                                        or print_results_input.lower() == "n"):
+                return False
+            else:
+                print("Only \"yes\", \"y\", \"no\" and \"n\" are accepted answers!")
+        except Exception as e:
+            print("Failed to read input with error: " + str(e))
+
+
 
 def main():
 
     # Form connection to database
     conn = db_commands.create_connection(DB_PATH)
 
-    arguments = sys.argv[1:]
+    arguments = sys.argv[1:] # used for scripting later
 
     print("\n\n")
     print("****                         ****")
@@ -70,7 +85,7 @@ def main():
             exit_program(conn)
 
     # Form search url and table_name
-    search_url = HUUTONET_SEARCH_URL
+    search_url = HUUTONET_API_ROOT + "items/words/"
     table_name = ""
     for term in terms:
         search_url += term
@@ -79,148 +94,95 @@ def main():
             search_url += "+"
             table_name += "+"
 
-    print("\nSearching results for: " + search_url)
+    print("\nSearching results for: {}".format(search_url))
 
-    # Request first page
-    req = grequests.get(search_url)
-    res = grequests.map([req])
-    res = res[0]
+    # request items
+    res = requests.get(url = search_url)
+    if not is_good_response(res):
+        exit_program(conn)
+    data = res.json()
+    items = data["items"]
 
-    if not isGoodResponse(res):
-        print("Encountered error searching url: " + search_url)
+    # ask whether to add items to db
+    items_to_db = ask_to_add_items(len(items), table_name)
+    if not items_to_db:
         exit_program(conn)
 
-    # Create a BeautifulSoup object
-    soup = BeautifulSoup(res.text, 'html.parser')
-
-    # Check how many search result pages and request all pages
-    pages = soup.find(id='pagination')
-    if pages:
-        list_items = pages.find_all('li')
-        num_pages = len(list_items) - 2
-        print ("\nNumber of search result pages: ", str(num_pages))
-        if num_pages > MAX_PAGES:
-            print("Number of search result pages exceeds " + str(MAX_PAGES) + ". Shutting down program.")
-            exit_program(conn)
-
-    # Enter all results to list
-    search_results = soup.find_all('div', class_='grid-element-container')
-    if pages:
-        search_urls = []
-        for num in range(2, num_pages + 1):
-
-            # Create search urls
-            search_url_page = search_url
-            search_url_page += "/page/" + str(num)
-            search_urls.append(search_url_page)
-
-        reqs = (grequests.get(url) for url in search_urls)
-        results = grequests.map(reqs)
-        for res in results:
-            if isGoodResponse(res):
-                soup_pages = BeautifulSoup(res.text, 'html.parser')
-                search_results_pages = soup_pages.find_all('div', class_='grid-element-container')
-                search_results += search_results_pages
-
-    print("Number of search results: " + str(len(search_results)))
-
-    # Iterate over results
-    result_num = 1
-    while(True):
-        try:
-            print_results_input = str(input("\nFound " + str(len(search_results)) + " results. Do you wish to add them to table {}? (yes/no)\n".format(table_name)))
-            if print_results_input and (print_results_input.lower() == "yes"
-                                        or print_results_input.lower() == "y"):
-                break
-            elif print_results_input and (print_results_input.lower() == "no"
-                                        or print_results_input.lower() == "n"):
-                exit_program(conn)
-            else:
-                print("Only \"yes\", \"y\", \"no\" and \"n\" are accepted answers!")
-        except Exception as e:
-            print("Failed to read input with error: " + str(e))
-
-
-    print("Creating table " + table_name)
+    print("\nCreating table {}\n".format(table_name))
     db_commands.execute_sql(conn, db_commands.create_table_sql(table_name))
+    conn.commit()
 
-    # Go over results and insert into database
+    # Get item ids in database
+    old_ids = db_commands.get_ids_from_table(conn, table_name)
+
+    # Go over items data and insert into database
+    search_url_items = []
     titles = []
     locations = []
     begin_dates = []
     end_dates = []
     prices = []
-    links = []
     conditions = []
     item_ids = []
     sellers = []
 
-    for result in search_results:
-        try:
-            title = result.find('div', class_='item-card__title').text.strip()
-            titles.append(title)
-            link = HUUTONET_URL + result.find('a', class_='item-card-link')['href'].strip()
-            links.append(link)
-        except Exception as e:
-            print("Encountered error" + str(e) + " when parsing search results")
+    for item in items:
+        search_url_items.append(item["links"]["self"])
 
-    # Get item ids in database
-    old_ids = db_commands.get_ids_from_table(conn, table_name)
+    # request items data
+    reqs = (grequests.get(url) for url in search_url_items)
+    responses = grequests.map(reqs)
 
-    # Get seller names through item links
-    search_results = []
-    reqs = (grequests.get(link) for link in links)
-    results = grequests.map(reqs)
-    for i in range(len(results)):
-        if isGoodResponse(results[i]):
-            soup_page = BeautifulSoup(results[i].text, 'html.parser')
-            sellers.append(soup_page.find('div', class_='mini-profile').find('a', href=True).text.strip())
-            info_table = soup_page.find('table', class_='info-table').find_all('tr')
+    for res in responses:
+        if not is_good_response(res):
+            continue
+        item = res.json()
 
-            # Find item info from info_table
-            for tr in info_table:
-                tds = tr.find_all('td')
-                if 'hinta' in tds[0].text.lower():
-                    price = tds[1].text.strip()
-                    price = price.split()[0].replace(",", ".") # remove euro sign and replace possible comma with dot
-                    prices.append(float(price))
-                elif 'Sijainti' in tds[0]:
-                    locations.append(tds[1].text.strip())
-                elif 'Kunto' in tds[0]:
-                    conditions.append(tds[1].text.strip())
-                elif 'Lisätty' in tds[0]:
-                    begin_date_str = tds[1].text.strip()
-                    begin_date = datetime.strptime(begin_date_str, '%d.%m.%Y %H:%M')
-                    begin_dates.append(begin_date)
-                elif 'Sulkeutuu' in tds[0]:
-                    end_date_str = tds[1].text.strip()
-                    end_date = datetime.strptime(end_date_str, '%d.%m.%Y %H:%M')
-                    end_dates.append(end_date)
-                elif 'Kohdenumero' in tds[0]:
-                    item_ids.append(int(tds[1].text.strip()))
+        item_id = int(item["id"])
+        item_ids.append(item_id)
 
-            # Found new item --> add to db (and notify user)
-            if not old_ids or old_ids and item_ids[i] not in old_ids:
-                print("New id: " + str(item_ids[i]))
-                sql = db_commands.insert_row_sql(table_name, item_ids[i], titles[i] , sellers[i],\
-                                                 prices[i], conditions[i], locations[i],\
-                                                 str(begin_dates[i]), str(end_dates[i]))
-                inserted = db_commands.execute_sql(conn, sql)
-                if inserted:
-                    print("Insertion succeeded!")
+        title = item["title"]
+        titles.append(title)
 
-            # Update old value with current values
-            else:
-                sql = db_commands.update_row_sql(table_name, item_ids[i], titles[i] , sellers[i],\
-                                                 prices[i], conditions[i], locations[i],\
-                                                 str(begin_dates[i]), str(end_dates[i]))
-                updated = db_commands.execute_sql(conn, sql)
-                if updated:
-                    print("Update succeeded for id " + str(item_ids[i]))
+        seller = item["seller"]
+        sellers.append(item["seller"])
+
+        condition = item["condition"]
+        conditions.append(condition)
+
+        price = float(item["currentPrice"])
+        prices.append(price)
+
+        location = "{} {}".format(item["location"], item["postalCode"])
+        locations.append(location)
+
+        begin_date = datetime.strptime(item["listTime"], '%Y-%m-%dT%H:%M:%S%z')
+        begin_dates.append(begin_date)
+
+        end_date = datetime.strptime(item["closingTime"], '%Y-%m-%dT%H:%M:%S%z')
+        end_dates.append(end_date)
+
+        # Found new item --> add to db (and notify user)
+        if not old_ids or int(item["id"]) not in old_ids:
+            sql = db_commands.insert_row_sql(table_name, item_id, title , seller,\
+                                             price, condition, location,\
+                                             str(begin_date), str(end_date))
+            inserted = db_commands.execute_sql(conn, sql)
+            if inserted:
+                print("Insertion succeeded for id {}".format(item_id))
+
+        # Update old value with current values
+        else:
+            sql = db_commands.update_row_sql(table_name, item_id, title , seller,\
+                                             price, condition, location,\
+                                             str(begin_date), str(end_date))
+            updated = db_commands.execute_sql(conn, sql)
+            if updated:
+                print("Update succeeded for id {}".format(item_id))
 
     table_size = db_commands.get_table_size(conn, table_name)
     if table_size:
-        print("{} table size: ".format(table_name) + str(table_size))
+        print("\n{} table size: {}".format(table_name,table_size))
 
     conn.commit()
     if conn:
