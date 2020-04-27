@@ -28,18 +28,44 @@ def create_table_sql(table_name):
     return sql_create_table
 
 
-def insert_into_table_sql(*args):
-    sql_insert_into_table = """INSERT INTO {}(id, title, seller, price, condition, location, begin_date, end_date)
+def insert_row_sql(*args):
+    sql_insert_row = """INSERT INTO {}(id, title, seller, price, condition, location, begin_date, end_date)
                                VALUES({}, '{}', '{}', {}, '{}', '{}', '{}', '{}')"""\
                                .format(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8])
 
     #print(sql_insert_into_table)
-    return sql_insert_into_table
+    return sql_insert_row
 
 
-def select_table_size_sql(table_name):
-    sql = """SELECT SUM("pgsize) FROM "dbstat" WHERE name='{}'""".format(table_name)
+def get_table_size(conn, table_name):
+    sql = """SELECT COUNT(*) FROM '{}'""".format(table_name)
+    try:
+        c = conn.cursor()
+        c.execute(sql)
+        count = c.fetchone()[0]
+        return count
+    except Error as e:
+        print(e)
+        return None
+
+
+def get_ids_from_table(conn, table_name):
+    sql = """SELECT id FROM '{}'""".format(table_name)
+    try:
+        c = conn.cursor()
+        c.execute(sql)
+        ids = [id[0] for id in c.fetchall()]
+        return ids
+    except Error as e:
+        print("get_ids_from_table: " + e)
+        return None
+
+def update_row_sql(*args):
+    sql = """UPDATE {}
+             SET id = {}, title = '{}', seller = '{}', price = {}, condition = '{}', location = '{}', begin_date = '{}', end_date = '{}'
+             WHERE id = {}""".format(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[1])
     return sql
+
 
 def check_if_table_exists(table_name):
     sql = """SELECT name FROM sqlite_master WHERE type='table' AND name='{}'""".format(table_name)

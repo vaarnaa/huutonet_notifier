@@ -24,8 +24,23 @@ def isGoodResponse(resp):
 def exit_program(conn):
     if conn:
         conn.close()
-    print("Exiting program")
+    print("\nExiting program")
     sys.exit()
+
+
+def ask_search_terms():
+    while(True):
+        try:
+            terms_input = str(input("\nEnter search terms delimited by space. Exit program with \"exit\".\n"))
+            terms = terms_input.split()
+            if not terms:
+                continue
+            elif len(terms) == 1 and (terms[0]).lower() == "exit":
+                return None
+            else:
+                return terms
+        except Exception as e:
+            print("\nEncountered error" + str(e) + "in input.")
 
 
 
@@ -34,91 +49,37 @@ def main():
     # Form connection to database
     conn = db_commands.create_connection(DB_PATH)
 
+    arguments = sys.argv[1:]
 
-    print("*****")
-    print("*****")
-    print("Search from huuto.net")
-    print("*****")
-    print("*****")
+    print("\n\n")
+    print("****                         ****")
+    print("***                           ***")
+    print("**                             **")
+    print("*                               *")
+    print("      Search from huuto.net      ")
+    print("*                               *")
+    print("**                             **")
+    print("****                          ***")
+    print("****                         ****")
+    print("\n")
 
     # Ask search terms
-    while(True):
-        try:
-            terms_input = str(input("Enter search terms delimited by space\n"))
-            terms = terms_input.split()
-            if len(terms) == 1 and (terms[0]).lower() == "c":
-                exit_program(conn)
-            break
-        except Exception as e:
-            print("Encountered error" + str(e) + "in input. Enter search terms delimited by space. Exit program with \"c\".")
-    if not terms:
-        exit_program(conn)
+    if not arguments:
+        terms = ask_search_terms()
+        if not terms:
+            exit_program(conn)
 
-
-
-    # Check if user wants to add min or max price to search
-    while(True):
-        try:
-            ask_price = str(input("Do you wish to enter min or max price? (yes/no)\n"))
-            if ask_price and (ask_price.lower() == "yes"
-                              or ask_price.lower() == "y"
-                              or ask_price.lower() == "no"
-                              or ask_price.lower() == "n"):
-                break
-            else:
-                print("Only \"yes\", \"y\", \"no\" and \"n\" are accepted answers!")
-        except Exception as e:
-            print("Failed to read input with error: " + str(e))
-
-
-    # Check if user wants to include minimum price to search
-    price_min = None
-    if ask_price and (ask_price.lower() == "yes" or ask_price.lower() == "y"):
-        while(not price_min):
-            try:
-                price_min = str(input("Enter min price (integer) or leave empty\n"))
-                if price_min is None:
-                    break
-                else:
-                    price_min = int(price_min)
-                    print("Price min: " + str(price_min))
-            except Exception as e:
-                print("Failed to read input with error: " + str(e))
-
-
-    # Check if user wants to include maximum price to search
-    price_max = None
-    if ask_price and (ask_price.lower() == "yes" or ask_price.lower() == "y"):
-        while(not price_max):
-            try:
-                price_max = str(input("Enter max price (integer) or leave empty\n"))
-                if price_max is None:
-                    break
-                else:
-                    price_max = int(price_max)
-                    print("Price max: " + str(price_max))
-            except Exception as e:
-                print("Failed to read input with error: " + str(e))
-
-    # Form search url and db_table
+    # Form search url and table_name
     search_url = HUUTONET_SEARCH_URL
-    db_table = ""
+    table_name = ""
     for term in terms:
         search_url += term
-        db_table += term
+        table_name += term
         if len(terms) > 1 and term is not terms[-1]:
             search_url += "+"
-            db_table += "+"
+            table_name += "+"
 
-    print("Creating table " + db_table)
-    db_commands.execute_sql(conn, db_commands.create_table_sql(db_table))
-
-    if ask_price:
-        if price_min:
-            search_url += "/price_min/" + str(price_min)
-        if price_max:
-            search_url += "/price_max/" + str(price_max)
-    print("\nSearch url: " + search_url)
+    print("\nSearching results for: " + search_url)
 
     # Request first page
     req = grequests.get(search_url)
@@ -148,7 +109,7 @@ def main():
         search_urls = []
         for num in range(2, num_pages + 1):
 
-            # Create connection
+            # Create search urls
             search_url_page = search_url
             search_url_page += "/page/" + str(num)
             search_urls.append(search_url_page)
@@ -167,7 +128,7 @@ def main():
     result_num = 1
     while(True):
         try:
-            print_results_input = str(input("\nFound " + str(len(search_results)) + " results. Do you wish to print them? (yes/no)\n"))
+            print_results_input = str(input("\nFound " + str(len(search_results)) + " results. Do you wish to add them to table {}? (yes/no)\n".format(table_name)))
             if print_results_input and (print_results_input.lower() == "yes"
                                         or print_results_input.lower() == "y"):
                 break
@@ -178,6 +139,10 @@ def main():
                 print("Only \"yes\", \"y\", \"no\" and \"n\" are accepted answers!")
         except Exception as e:
             print("Failed to read input with error: " + str(e))
+
+
+    print("Creating table " + table_name)
+    db_commands.execute_sql(conn, db_commands.create_table_sql(table_name))
 
     # Go over results and insert into database
     titles = []
@@ -199,6 +164,9 @@ def main():
         except Exception as e:
             print("Encountered error" + str(e) + " when parsing search results")
 
+    # Get item ids in database
+    old_ids = db_commands.get_ids_from_table(conn, table_name)
+
     # Get seller names through item links
     search_results = []
     reqs = (grequests.get(link) for link in links)
@@ -209,7 +177,7 @@ def main():
             sellers.append(soup_page.find('div', class_='mini-profile').find('a', href=True).text.strip())
             info_table = soup_page.find('table', class_='info-table').find_all('tr')
 
-            # Find item info from table and add to db
+            # Find item info from info_table
             for tr in info_table:
                 tds = tr.find_all('td')
                 if 'hinta' in tds[0].text.lower():
@@ -230,13 +198,29 @@ def main():
                     end_dates.append(end_date)
                 elif 'Kohdenumero' in tds[0]:
                     item_ids.append(int(tds[1].text.strip()))
-            sql = db_commands.insert_into_table_sql(db_table, item_ids[i], titles[i] , sellers[i],\
-                                                    prices[i], conditions[i], locations[i],\
-                                                    str(begin_dates[i]), str(end_dates[i]))
-            inserted = db_commands.execute_sql(conn, sql)
-            if inserted:
-                print("New item added: "+str(item_ids[i]))
-            conn.commit()
+
+            # Found new item --> add to db (and notify user)
+            if not old_ids or old_ids and item_ids[i] not in old_ids:
+                print("New id: " + str(item_ids[i]))
+                sql = db_commands.insert_row_sql(table_name, item_ids[i], titles[i] , sellers[i],\
+                                                 prices[i], conditions[i], locations[i],\
+                                                 str(begin_dates[i]), str(end_dates[i]))
+                inserted = db_commands.execute_sql(conn, sql)
+                if inserted:
+                    print("Insertion succeeded!")
+
+            # Update old value with current values
+            else:
+                sql = db_commands.update_row_sql(table_name, item_ids[i], titles[i] , sellers[i],\
+                                                 prices[i], conditions[i], locations[i],\
+                                                 str(begin_dates[i]), str(end_dates[i]))
+                updated = db_commands.execute_sql(conn, sql)
+                if updated:
+                    print("Update succeeded for id " + str(item_ids[i]))
+
+    table_size = db_commands.get_table_size(conn, table_name)
+    if table_size:
+        print("{} table size: ".format(table_name) + str(table_size))
 
     conn.commit()
     if conn:
