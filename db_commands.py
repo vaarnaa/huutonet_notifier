@@ -2,6 +2,7 @@
 
 import sqlite3
 from sqlite3 import Error
+from datetime import datetime
 
 
 def create_connection(db_file):
@@ -42,9 +43,10 @@ def get_ids_from_table(conn, table_name):
         return None
 
 
-def delete_removed_items(conn, table_name):
+def delete_removed_items(conn, table_name, time):
+
     sql = """DELETE FROM '{}'
-             WHERE row_updated <= datetime('now','-5 minutes')""".format(table_name)
+             WHERE row_updated < '{}'""".format(table_name, time) #datetime('now','-5 minutes')
     try:
         c = conn.cursor()
         c.execute(sql)

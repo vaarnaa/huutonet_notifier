@@ -4,3 +4,6 @@
 
 # Caches
 __pycache__/
+
+# Environmental variables
+env.py

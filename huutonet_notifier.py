@@ -1,17 +1,31 @@
 
 
 import sys
+import os
 import grequests
 import requests
 from datetime import datetime
 import json
+import smtplib
+from email.message import EmailMessage
+from email.headerregistry import Address
+from email.utils import make_msgid
+import ssl
 
+import env
 import db_commands
 
 MAX_PAGES = 20
 DB_PATH = './testDB.db'
 HUUTONET_API_ROOT = "https://api.huuto.net/1.1/"
-#g_table_name = ""
+
+# Get environment variables
+gmail_user = env.USER_EMAIL
+gmail_password = env.USER_PASSWORD
+print(gmail_user)
+print(gmail_password)
+
+
 
 
 def is_good_response(res):
@@ -46,7 +60,7 @@ def ask_search_terms():
 def ask_to_add_items(count_items, table_name):
     while(True):
         try:
-            print_results_input = str(input("\nFound {} results. Do you wish to add them to table {}? (yes/no)\n".format(count_items, table_name)))
+            print_results_input = str(input("\nFound {} results. Do you wish to add them to table \'{}\'? (yes/no)\n".format(count_items, table_name)))
             if print_results_input and (print_results_input.lower() == "yes"
                                         or print_results_input.lower() == "y"):
                 return True
@@ -66,6 +80,7 @@ def add_items_to_db(conn, table_name, dict_search_url_items):
 
     inserted_item_indexes = []
     updated_item_indexes = []
+    links_inserted = []
     i = 0
     for res in responses:
         if not is_good_response(res):
@@ -78,59 +93,100 @@ def add_items_to_db(conn, table_name, dict_search_url_items):
         condition = item["condition"]
         price = float(item["currentPrice"])
         location = "{} {}".format(item["location"], item["postalCode"])
-        begin_date = datetime.strptime(item["listTime"], '%Y-%m-%dT%H:%M:%S%z')
-        end_date = datetime.strptime(item["closingTime"], '%Y-%m-%dT%H:%M:%S%z')
+        begin_date = str(datetime.strptime(item["listTime"], '%Y-%m-%dT%H:%M:%S%z')).split("+")[0]
+        end_date = str(datetime.strptime(item["closingTime"], '%Y-%m-%dT%H:%M:%S%z')).split("+")[0]
 
         d = datetime.now()
-        d_strftime = d.strftime("%Y-%m-%dT%H:%M:%S%z") + str("+03:00")
+        d_strftime = d.strftime("%Y-%m-%dT%H:%M:%S")
 
         # Found new item --> add to db (and notify user)
-        if not old_ids or int(item["id"]) not in old_ids:
+        if not old_ids or item_id not in old_ids:
             sql = db_commands.insert_row_sql(table_name, item_id, title , seller,\
                                              price, condition, location,\
                                              str(begin_date), str(end_date), str(d_strftime))
             inserted = db_commands.execute_sql(conn, sql)
             if inserted:
+                links_inserted.append(item["links"]["alternative"])
                 inserted_item_indexes.append(i)
-                #print("Insertion succeeded for id {}".format(item_id))
 
         # Update old value with current values
         else:
             sql = db_commands.update_row_sql(table_name, item_id, title , seller,\
                                              price, condition, location,\
                                              str(begin_date), str(end_date), str(d_strftime))
-            updated = db_commands.execute_sql(conn, sql)
+            updated = None#db_commands.execute_sql(conn, sql)
             if updated:
                 updated_item_indexes.append(i)
-                #print("Update succeeded for id {}".format(item_id))
         i += 1
 
     table_size = db_commands.get_table_size(conn, table_name)
     if table_size:
-        print("\n\n{} table size: {}".format(table_name,table_size))
+        print("\n\n\'{}\' table size before deletes: {}".format(table_name,table_size))
 
     # For items removed from huutonet:
-    # --> Find all rows that were not inserted/updated and delete them
-    deleted = db_commands.delete_removed_items(conn, table_name)
+    # Find all rows that were not inserted/updated and delete them
+    deleted = db_commands.delete_removed_items(conn, table_name, str(d_strftime))
     if deleted:
-        print("Delete success: " + str(deleted))
+        print("Items deleted since last query: {}".format(str(deleted)))
     else:
-        print("No items removed from huutonet since last query for table: {}".format(table_name))
+        print("No items removed from huutonet since last query.")
 
     print("\nInserted item indexes: {}".format(str(inserted_item_indexes)))
     print("Updated item indexes: {}".format(str(updated_item_indexes)))
+    print("links_inserted: {}".format(str(links_inserted)))
+
+    return links_inserted
+
+
+def send_email(dict_links):
+
+    # Form email body
+    query_title = "New notifcations from huutonet for query: "
+    body = ""
+
+    for table_name in dict_links:
+        body += query_title + "\'"+ table_name + "\'\n"
+        links = dict_links[table_name]
+        for link in links:
+            body += str(link) + "\n"
+        body += "\n"
+
+
+
+    #body = "New notifcations from huutonet for query \'{}\':\n".format(table_name)
+    #for link in links:
+    #    body += str(link) + "\n"
+
+    sender_email = gmail_user
+    receiver_emails = [gmail_user]
+    subject = "Huutonet notifications"
+    port = 465
+
+    email_text = """From: %s\nTo: %s\nSubject: %s\n\n%s
+    """ % (sender_email, ", ".join(receiver_emails), subject, body)
+
+
+    try:
+        context = ssl.create_default_context()
+        server = smtplib.SMTP_SSL("smtp.gmail.com", port, context=context)
+        server.login(sender_email, gmail_password)
+        server.sendmail(sender_email, receiver_emails, email_text)
+        str_receiver_emails = ", ".join(receiver_emails)
+        print("\nEmail sent to: {}\n".format(str_receiver_emails))
+    except Exception as exception:
+        print(exception)
+    finally:
+        server.quit()
 
 
 
 def main():
-    #global g_table_name
-
 
 
     # Form connection to database
     conn = db_commands.create_connection(DB_PATH)
 
-    arguments = sys.argv[1:] # used for scripting later
+    arguments = sys.argv[1:]
 
     print("\n\n")
     print("****                         ****")
@@ -143,7 +199,6 @@ def main():
     print("****                          ***")
     print("****                         ****")
     print("\n")
-
 
 
     #
@@ -183,9 +238,13 @@ def main():
         if not items_to_db:
             exit_program(conn)
 
-        print("\nCreating table {}\n".format(table_name))
-        db_commands.execute_sql(conn, db_commands.create_table_sql(table_name))
-        conn.commit()
+        created = db_commands.execute_sql(conn, db_commands.create_table_sql(table_name))
+        if created:
+            conn.commit()
+            print("\nCreated table: {}".format(table_name))
+        else:
+            print("Failed to create table {}".format())
+
         exit_program(conn)
 
 
@@ -195,7 +254,7 @@ def main():
 
     # Get tables in db:
     table_names = db_commands.get_tables(conn)
-    print("Tables: {}".format(str(table_names)))
+    print("Tables in db: {}".format(str(table_names)))
 
     # Form search urls for each table
     search_urls = []
@@ -220,11 +279,20 @@ def main():
         dict_search_url_items[table_name] = search_url_items
 
     # request items data for each table and insert/update data in table
-    reqs = []
+    added_links_dict = {}
     for table_name in table_names:
-        add_items_to_db(conn, table_name, dict_search_url_items)
+        links_inserted = add_items_to_db(conn, table_name, dict_search_url_items)
+        if links_inserted:
+            added_links_dict[table_name] = links_inserted
 
-    conn.commit()
+    if conn:
+        conn.commit()
+
+    # Send email about new items
+    if added_links_dict:
+        send_email(added_links_dict)
+
+
     if conn:
         conn.close()
 
