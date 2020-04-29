@@ -1,6 +1,6 @@
 # Huutonet notifier
 
-This is a simple Python program to notify about new items added to huutonet (www.huutonet.fi) online marketplace platform. Huutonet API (https://dev.huuto.net/) is used for querying the marketplace periodically. Search queries are saved to database.
+This is a simple Python program to send notifications about new items added to huutonet (www.huutonet.fi) online marketplace platform. Notifications are sent by email. Huutonet API (https://dev.huuto.net/) is used for querying the marketplace periodically. Search queries are saved to database.
 
 ## Future prospects
 

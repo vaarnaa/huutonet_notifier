@@ -18,12 +18,11 @@ import db_commands
 MAX_PAGES = 20
 DB_PATH = './testDB.db'
 HUUTONET_API_ROOT = "https://api.huuto.net/1.1/"
+QUERY_FILE_PATH = 'queries.txt'
 
 # Get environment variables
 gmail_user = env.USER_EMAIL
 gmail_password = env.USER_PASSWORD
-print(gmail_user)
-print(gmail_password)
 
 
 
@@ -73,69 +72,73 @@ def ask_to_add_items(count_items, table_name):
             print("Failed to read input with error: " + str(e))
 
 
-def add_items_to_db(conn, table_name, dict_search_url_items):
-    reqs = [grequests.get(url)  for url in dict_search_url_items[table_name]]
+def extract_item_data(item, data):
+    data["item_id"] = int(item["id"])
+    data["title"] = item["title"]
+    data["seller"] = item["seller"]
+    data["condition"] = item["condition"]
+    data["price"] = float(item["currentPrice"])
+    data["location"] = "{} {}".format(item["location"], item["postalCode"])
+    data["begin_date"] = str(datetime.strptime(item["listTime"], '%Y-%m-%dT%H:%M:%S%z')).split("+")[0]
+    data["end_date"] = str(datetime.strptime(item["closingTime"], '%Y-%m-%dT%H:%M:%S%z')).split("+")[0]
+
+
+def add_items_to_db(conn, table_name, search_url_items):
+    reqs = [grequests.get(url)  for url in search_url_items[table_name]]
     responses = grequests.map(reqs)
     old_ids = db_commands.get_ids_from_table(conn, table_name)
 
     inserted_item_indexes = []
     updated_item_indexes = []
-    links_inserted = []
+    inserted_links = []
     i = 0
+    d = datetime.now()
+    d_strftime = str(d.strftime("%Y-%m-%dT%H:%M:%S"))
+
     for res in responses:
         if not is_good_response(res):
             continue
         item = res.json()
+        data = {}
+        extract_item_data(item, data)
 
-        item_id = int(item["id"])
-        title = item["title"]
-        seller = item["seller"]
-        condition = item["condition"]
-        price = float(item["currentPrice"])
-        location = "{} {}".format(item["location"], item["postalCode"])
-        begin_date = str(datetime.strptime(item["listTime"], '%Y-%m-%dT%H:%M:%S%z')).split("+")[0]
-        end_date = str(datetime.strptime(item["closingTime"], '%Y-%m-%dT%H:%M:%S%z')).split("+")[0]
-
-        d = datetime.now()
-        d_strftime = d.strftime("%Y-%m-%dT%H:%M:%S")
-
-        # Found new item --> add to db (and notify user)
-        if not old_ids or item_id not in old_ids:
-            sql = db_commands.insert_row_sql(table_name, item_id, title , seller,\
-                                             price, condition, location,\
-                                             str(begin_date), str(end_date), str(d_strftime))
+        # Add new item to db
+        if not old_ids or data["item_id"] not in old_ids:
+            sql = db_commands.insert_row_sql(table_name, data["item_id"], data["title"] , data["seller"],\
+                                             data["price"], data["condition"], data["location"],\
+                                             data["begin_date"], data["end_date"], d_strftime)
             inserted = db_commands.execute_sql(conn, sql)
             if inserted:
-                links_inserted.append(item["links"]["alternative"])
+                inserted_links.append(item["links"]["alternative"])
                 inserted_item_indexes.append(i)
 
         # Update old value with current values
         else:
-            sql = db_commands.update_row_sql(table_name, item_id, title , seller,\
-                                             price, condition, location,\
-                                             str(begin_date), str(end_date), str(d_strftime))
-            updated = None#db_commands.execute_sql(conn, sql)
-            if updated:
-                updated_item_indexes.append(i)
+            sql = db_commands.update_row_sql(table_name, data["item_id"], data["title"] , data["seller"],\
+                                             data["price"], data["condition"], data["location"],\
+                                             data["begin_date"], data["end_date"], d_strftime)
+            updated = db_commands.execute_sql(conn, sql)
+            #if updated:
+                #updated_item_indexes.append(i)
         i += 1
 
+    # For debugging:
     table_size = db_commands.get_table_size(conn, table_name)
     if table_size:
         print("\n\n\'{}\' table size before deletes: {}".format(table_name,table_size))
 
-    # For items removed from huutonet:
-    # Find all rows that were not inserted/updated and delete them
-    deleted = db_commands.delete_removed_items(conn, table_name, str(d_strftime))
+    # Remove items from db that no longer exist
+    deleted = db_commands.delete_removed_items(conn, table_name, d_strftime)
     if deleted:
         print("Items deleted since last query: {}".format(str(deleted)))
     else:
         print("No items removed from huutonet since last query.")
 
-    print("\nInserted item indexes: {}".format(str(inserted_item_indexes)))
-    print("Updated item indexes: {}".format(str(updated_item_indexes)))
-    print("links_inserted: {}".format(str(links_inserted)))
+    #print("\nInserted item indexes: {}".format(str(inserted_item_indexes)))
+    #print("Updated item indexes: {}".format(str(updated_item_indexes)))
+    #print("Inserted links: {}".format(str(inserted_links)))
 
-    return links_inserted
+    return inserted_links
 
 
 def send_email(dict_links):
@@ -150,12 +153,6 @@ def send_email(dict_links):
         for link in links:
             body += str(link) + "\n"
         body += "\n"
-
-
-
-    #body = "New notifcations from huutonet for query \'{}\':\n".format(table_name)
-    #for link in links:
-    #    body += str(link) + "\n"
 
     sender_email = gmail_user
     receiver_emails = [gmail_user]
@@ -172,7 +169,9 @@ def send_email(dict_links):
         server.login(sender_email, gmail_password)
         server.sendmail(sender_email, receiver_emails, email_text)
         str_receiver_emails = ", ".join(receiver_emails)
-        print("\nEmail sent to: {}\n".format(str_receiver_emails))
+        string = "\nNew items added to tables:\n {}\n".format("\n ".join([key for key in dict_links]))
+        print(string)
+        print("Email sent to: {}\n".format(str_receiver_emails))
     except Exception as exception:
         print(exception)
     finally:
@@ -207,44 +206,51 @@ def main():
     #
 
     if arguments:
-        query = "+".join(sys.argv[1:])
-        print("Query: " + str(query))
-        if not query:
+        query_file = sys.argv[1]
+        print("Query file: {}\n".format(query_file))
+        if not query_file:
             exit_program(conn)
 
-        # Form search url and table_name
-        search_url = HUUTONET_API_ROOT + "items/words/"
-        table_name = query
-        search_url += query + "/limit/500"
+        with open(query_file, "r") as file:
+            for line in file:
+                query = "+".join(line.strip().split())
+                print("Query: {}".format(query))
+                # Form search url and table_name
+                search_url = HUUTONET_API_ROOT + "items/words/"
+                table_name = query
+                search_url += query + "/limit/500"
 
 
-        print("\nSearching results for: {}".format(search_url))
+                print("Searching results for: {}".format(search_url))
 
-        # request items
-        res = requests.get(url = search_url)
-        if not is_good_response(res):
-            exit_program(conn)
-        data = res.json()
-        if "errors" in data:
-            print(data["errors"][0]["messages"][0])
-            exit_program(conn)
-        items = data["items"]
-        if len(items) == 500:
-            print("Query count exceeds 500. Please elaborate your search with more key words.")
-            exit_program(conn)
+                # request items
+                res = requests.get(url = search_url)
+                if not is_good_response(res):
+                    exit_program(conn)
+                data = res.json()
 
-        # ask whether to add items to db
-        items_to_db = ask_to_add_items(len(items), table_name)
-        if not items_to_db:
-            exit_program(conn)
+                if "errors" in data:
+                    print(data["errors"][0]["messages"][0])
+                    exit_program(conn)
 
-        created = db_commands.execute_sql(conn, db_commands.create_table_sql(table_name))
-        if created:
-            conn.commit()
-            print("\nCreated table: {}".format(table_name))
-        else:
-            print("Failed to create table {}".format())
+                items = data["items"]
+                if len(items) == 500:
+                    print("Query count for {} exceeds 500. Please elaborate your search with more key words in query file.".format(query))
+                    exit_program(conn)
 
+                # ask whether to add items to db
+                #items_to_db = ask_to_add_items(len(items), table_name)
+                #if not items_to_db:
+                #    exit_program(conn)
+
+                created = db_commands.execute_sql(conn, db_commands.create_table_sql(table_name))
+                if created:
+
+                    print("Created table: {}\n".format(table_name))
+                else:
+                    print("Failed to create table {}\n".format(table_name))
+
+        conn.commit()
         exit_program(conn)
 
 
@@ -266,7 +272,7 @@ def main():
     # request items for each table and add together
     reqs = (grequests.get(url) for url in search_urls)
     responses = grequests.map(reqs)
-    dict_search_url_items = {}
+    search_url_items = {}
     for res in responses:
         if not is_good_response(res):
             continue
@@ -275,22 +281,21 @@ def main():
         table_name = data["links"]["hits"].split("=")[1]
         if "&" in table_name:
             table_name = table_name.split("&")[0]
-        search_url_items = [item["links"]["self"] for item in items]
-        dict_search_url_items[table_name] = search_url_items
+        search_url_items[table_name] = [item["links"]["self"] for item in items]
 
     # request items data for each table and insert/update data in table
-    added_links_dict = {}
+    added_items = {}
     for table_name in table_names:
-        links_inserted = add_items_to_db(conn, table_name, dict_search_url_items)
-        if links_inserted:
-            added_links_dict[table_name] = links_inserted
+        inserted_links = add_items_to_db(conn, table_name, search_url_items)
+        if inserted_links:
+            added_items[table_name] = inserted_links
 
     if conn:
         conn.commit()
 
     # Send email about new items
-    if added_links_dict:
-        send_email(added_links_dict)
+    if added_items:
+        send_email(added_items)
 
 
     if conn:
