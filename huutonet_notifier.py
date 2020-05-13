@@ -41,37 +41,6 @@ def exit_program(conn):
     sys.exit()
 
 
-def ask_search_terms():
-    while(True):
-        try:
-            terms_input = str(input("\nEnter search terms delimited by space. Exit program with \"exit\".\n"))
-            terms = terms_input.split()
-            if not terms:
-                continue
-            elif len(terms) == 1 and (terms[0]).lower() == "exit":
-                return None
-            else:
-                return terms
-        except Exception as e:
-            print("\nEncountered error" + str(e) + "in input.")
-
-
-def ask_to_add_items(count_items, table_name):
-    while(True):
-        try:
-            print_results_input = str(input("\nFound {} results. Do you wish to add them to table \'{}\'? (yes/no)\n".format(count_items, table_name)))
-            if print_results_input and (print_results_input.lower() == "yes"
-                                        or print_results_input.lower() == "y"):
-                return True
-            elif print_results_input and (print_results_input.lower() == "no"
-                                        or print_results_input.lower() == "n"):
-                return False
-            else:
-                print("Only \"yes\", \"y\", \"no\" and \"n\" are accepted answers!")
-        except Exception as e:
-            print("Failed to read input with error: " + str(e))
-
-
 def extract_item_data(item, data):
     data["item_id"] = int(item["id"])
     data["title"] = item["title"]
@@ -118,8 +87,6 @@ def add_items_to_db(conn, table_name, search_url_items):
                                              data["price"], data["condition"], data["location"],\
                                              data["begin_date"], data["end_date"], d_strftime)
             updated = db_commands.execute_sql(conn, sql)
-            #if updated:
-                #updated_item_indexes.append(i)
         i += 1
 
     # For debugging:
@@ -133,10 +100,6 @@ def add_items_to_db(conn, table_name, search_url_items):
         print("Items deleted since last query: {}".format(str(deleted)))
     else:
         print("No items removed from huutonet since last query.")
-
-    #print("\nInserted item indexes: {}".format(str(inserted_item_indexes)))
-    #print("Updated item indexes: {}".format(str(updated_item_indexes)))
-    #print("Inserted links: {}".format(str(inserted_links)))
 
     return inserted_links
 
@@ -162,7 +125,6 @@ def send_email(dict_links):
     email_text = """From: %s\nTo: %s\nSubject: %s\n\n%s
     """ % (sender_email, ", ".join(receiver_emails), subject, body)
 
-
     try:
         context = ssl.create_default_context()
         server = smtplib.SMTP_SSL("smtp.gmail.com", port, context=context)
@@ -180,7 +142,6 @@ def send_email(dict_links):
 
 
 def main():
-
 
     # Form connection to database
     conn = db_commands.create_connection(DB_PATH)
@@ -201,8 +162,7 @@ def main():
 
 
     #
-    # Arguments are used for searching huutonet and as table_names in db for
-    # storing search results
+    # Arguments are used as a file name for querying
     #
 
     if arguments:
@@ -215,11 +175,10 @@ def main():
             for line in file:
                 query = "+".join(line.strip().split())
                 print("Query: {}".format(query))
-                # Form search url and table_name
-                search_url = HUUTONET_API_ROOT + "items/words/"
-                table_name = query
-                search_url += query + "/limit/500"
 
+                # Form search url and table_name
+                search_url = "{}items/words/{}/limit/500".format(HUUTONET_API_ROOT, query)
+                table_name = query
 
                 print("Searching results for: {}".format(search_url))
 
@@ -238,11 +197,6 @@ def main():
                     print("Query count for {} exceeds 500. Please elaborate your search with more key words in query file.".format(query))
                     exit_program(conn)
 
-                # ask whether to add items to db
-                #items_to_db = ask_to_add_items(len(items), table_name)
-                #if not items_to_db:
-                #    exit_program(conn)
-
                 created = db_commands.execute_sql(conn, db_commands.create_table_sql(table_name))
                 if created:
 
@@ -251,12 +205,12 @@ def main():
                     print("Failed to create table {}\n".format(table_name))
 
         conn.commit()
-        exit_program(conn)
 
 
-
-
-    # Update search results for all tables in db
+    #
+    # Querying and updating tables in db. If ran with bash script without arguments,
+    # sends notifaction by email about new items
+    #
 
     # Get tables in db:
     table_names = db_commands.get_tables(conn)
@@ -265,9 +219,8 @@ def main():
     # Form search urls for each table
     search_urls = []
     for table_name in table_names:
-        search_url = HUUTONET_API_ROOT + "items/words/" + table_name +"/limit/500" # limiting search results to max=500
+        search_url = "{}items/words/{}/limit/500".format(HUUTONET_API_ROOT, table_name) # limiting search results to max=500
         search_urls.append(search_url)
-
 
     # request items for each table and add together
     reqs = (grequests.get(url) for url in search_urls)
@@ -294,13 +247,11 @@ def main():
         conn.commit()
 
     # Send email about new items
-    if added_items:
+    if not arguments and added_items:
         send_email(added_items)
-
 
     if conn:
         conn.close()
-
 
 
 
